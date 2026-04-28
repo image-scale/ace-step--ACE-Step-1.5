@@ -31,8 +31,8 @@ def _build_saved_params(
     constrained_decoding_debug, allow_lm_batch, auto_score, auto_lrc,
     score_scale, lm_batch_chunk_size,
     track_name, complete_track_classes,
-    enable_normalization, normalization_db, fade_in_duration, fade_out_duration,
-    latent_shift, latent_rescale,
+    enable_normalization, normalization_db, fade_in_duration, fade_out_duration=0.0,
+    latent_shift=1.0, latent_rescale=1.0,
     repaint_mode="balanced", repaint_strength=0.5,
 ):
     """Build the parameter snapshot dict stored in batch history."""
