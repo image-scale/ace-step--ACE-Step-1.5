@@ -57,30 +57,32 @@ class IoAudioMixinTests(unittest.TestCase):
     def test_process_src_audio_handles_load_error(self):
         """Source audio processing should return None on load failure."""
         host = _Host()
-        fake_ta = _fake_torchaudio_module(lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("bad")))
-        with patch.dict(sys.modules, {"torchaudio": fake_ta}):
+        with patch("acestep.core.generation.handler.io_audio.sf.read", side_effect=OSError("bad")):
             result = host.process_src_audio("bad.wav")
         self.assertIsNone(result)
 
     def test_process_reference_audio_returns_none_for_silence(self):
         """Reference audio should short-circuit for silent input."""
         host = _Host()
-        silent = torch.zeros(2, 16, dtype=torch.float32)
-        fake_ta = _fake_torchaudio_module(lambda *_args, **_kwargs: (silent, 48000))
-        with patch.dict(sys.modules, {"torchaudio": fake_ta}):
-            result = host.process_reference_audio("silent.wav")
+        silent_np = np.zeros(16, dtype=np.float32)
+        with patch("acestep.core.generation.handler.io_audio.sf.read", return_value=(silent_np, 48000)):
+            with patch.object(host, "_normalize_audio_to_stereo_48k", return_value=torch.zeros(2, 16)):
+                result = host.process_reference_audio("silent.wav")
         self.assertIsNone(result)
 
     def test_process_reference_audio_samples_expected_segments(self):
         """Reference audio should concatenate front/middle/back 10s sampled windows."""
         host = _Host()
-        base = torch.linspace(-1.0, 1.0, 1_800_000, dtype=torch.float32)
-        audio = torch.stack([base, -base], dim=0)
-        fake_ta = _fake_torchaudio_module(lambda *_args, **_kwargs: (audio, 48000))
+        # Create stereo numpy array (samples, channels) format for soundfile
+        base = np.linspace(-1.0, 1.0, 1_800_000, dtype=np.float32)
+        audio_np = np.stack([base, -base], axis=1)  # (samples, 2) for soundfile
+        # Expected torch format after transpose: (2, samples)
+        audio = torch.from_numpy(audio_np.T)
 
-        with patch.dict(sys.modules, {"torchaudio": fake_ta}):
-            with patch("acestep.core.generation.handler.io_audio.random.randint", side_effect=[10, 20, 30]):
-                result = host.process_reference_audio("ref.wav")
+        with patch("acestep.core.generation.handler.io_audio.sf.read", return_value=(audio_np, 48000)):
+            with patch.object(host, "_normalize_audio_to_stereo_48k", return_value=audio):
+                with patch("acestep.core.generation.handler.io_audio.random.randint", side_effect=[10, 20, 30]):
+                    result = host.process_reference_audio("ref.wav")
 
         self.assertIsNotNone(result)
         segment_frames = 10 * 48000
@@ -97,8 +99,7 @@ class IoAudioMixinTests(unittest.TestCase):
     def test_process_reference_audio_returns_none_on_load_error(self):
         """Reference audio processing should return None when loading fails."""
         host = _Host()
-        fake_ta = _fake_torchaudio_module(lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("bad")))
-        with patch.dict(sys.modules, {"torchaudio": fake_ta}):
+        with patch("acestep.core.generation.handler.io_audio.sf.read", side_effect=OSError("bad")):
             result = host.process_reference_audio("bad.wav")
         self.assertIsNone(result)
 
