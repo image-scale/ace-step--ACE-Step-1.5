@@ -150,6 +150,13 @@ def build_generation_setup(
         task_instructions=task_instructions,
     )
 
+    # Map legacy/alias infer_method values to canonical names
+    infer_method = req.infer_method
+    if infer_method == "euler":
+        infer_method = "ode"
+    elif infer_method == "heun":
+        infer_method = "ode"
+
     params = GenerationParams(
         task_type=req.task_type,
         instruction=instruction_to_use,
@@ -172,7 +179,7 @@ def build_generation_setup(
         cfg_interval_start=req.cfg_interval_start,
         cfg_interval_end=req.cfg_interval_end,
         shift=req.shift,
-        infer_method=req.infer_method,
+        infer_method=infer_method,
         timesteps=parsed_timesteps,
         repainting_start=req.repainting_start,
         repainting_end=req.repainting_end if req.repainting_end else -1,
