@@ -651,7 +651,7 @@ class LLMHandler:
                     "Triton not available: disabling CUDA graph capture for nano-vllm "
                     "(CUDA graphs require torch.compile which depends on Triton)"
                 )
-            enforce_eager_for_vllm = bool(is_rocm or is_jetson or not _has_flash_attn or not _has_triton)
+            enforce_eager_for_vllm = bool(is_rocm or is_jetson or not _has_flash_attn)
 
             # Auto-detect best backend on Apple Silicon
             if backend == "mlx" or (backend == "vllm" and device == "mps"):
@@ -711,7 +711,7 @@ class LLMHandler:
                             free_gb = (total_bytes - torch.cuda.memory_reserved(0)) / (1024**3)
                     except Exception:
                         free_gb = 0.0
-                if device == "cuda" and free_gb < VRAM_SAFE_FREE_GB:
+                if device == "cuda" and total_gb > 0.0 and free_gb < VRAM_SAFE_FREE_GB:
                     logger.warning(
                         f"vLLM disabled due to insufficient free VRAM (total={total_gb:.2f}GB, free={free_gb:.2f}GB, need>={VRAM_SAFE_FREE_GB}GB free) — falling back to PyTorch backend"
                     )
@@ -720,10 +720,10 @@ class LLMHandler:
                         return status_msg, False
                     status_msg = f"✅ 5Hz LM initialized successfully (PyTorch fallback)\nModel: {full_lm_model_path}\nBackend: PyTorch"
                 else:
+                    self._has_triton = _has_triton
                     status_msg = self._initialize_5hz_lm_vllm(
                         full_lm_model_path,
                         enforce_eager=enforce_eager_for_vllm,
-                        has_triton=_has_triton,
                     )
                     logger.info(f"5Hz LM status message: {status_msg}")
                     if status_msg.startswith("❌"):
@@ -755,7 +755,7 @@ class LLMHandler:
         except Exception as e:
             return f"❌ Error initializing 5Hz LM: {str(e)}\n\nTraceback:\n{traceback.format_exc()}", False
 
-    def _initialize_5hz_lm_vllm(self, model_path: str, enforce_eager: bool = False, has_triton: bool = True) -> str:
+    def _initialize_5hz_lm_vllm(self, model_path: str, enforce_eager: bool = False) -> str:
         """Initialize 5Hz LM model using vllm backend.
 
         Args:
@@ -763,11 +763,8 @@ class LLMHandler:
             enforce_eager: Disable CUDA graph capture.  Set to ``True`` when
                 Triton is unavailable so vLLM does not attempt graph capture
                 that depends on compiled kernels.
-            has_triton: Whether the Triton compiler is available.  When
-                ``False``, ``torch._dynamo`` diagnostics are temporarily
-                suppressed during initialization to avoid verbose fallback
-                warnings, then restored afterwards.
         """
+        has_triton = getattr(self, '_has_triton', True)
         if not torch.cuda.is_available():
             self.llm_initialized = False
             logger.error("CUDA/ROCm is not available. Please check your GPU setup.")
@@ -1257,6 +1254,19 @@ class LLMHandler:
             cot_yaml = ""
 
         return f"<think>\n{cot_yaml}\n</think>"
+
+    def _parse_metadata_from_cot(self, cot_output: str) -> Dict[str, Any]:
+        """
+        Parse metadata from CoT output text.
+
+        Args:
+            cot_output: Raw CoT text containing <think>...</think> tags with metadata.
+
+        Returns:
+            Dictionary with parsed metadata fields (bpm, caption, duration, etc.)
+        """
+        metadata, _ = self.parse_lm_output(cot_output)
+        return metadata
 
     def generate_with_stop_condition(
         self,
@@ -2347,12 +2357,6 @@ class LLMHandler:
         """
         if not getattr(self, "llm_initialized", False):
             return "", "❌ 5Hz LM not initialized. Please initialize it first."
-        # Check that the appropriate model is loaded for the active backend
-        if self.llm_backend == "mlx":
-            if self._mlx_model is None or self.llm_tokenizer is None:
-                return "", "❌ 5Hz LM is missing MLX model or tokenizer."
-        elif self.llm is None or self.llm_tokenizer is None:
-            return "", "❌ 5Hz LM is missing model or tokenizer."
 
         cfg = cfg or {}
         temperature = cfg.get("temperature", 0.6)
